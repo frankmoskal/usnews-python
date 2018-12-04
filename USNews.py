@@ -1,122 +1,120 @@
-from bs4 import BeautifulSoup, SoupStrainer
+import math
 import csv
-import lxml
 import re
-import requests
+import time
+from selenium import webdriver
 
+###
+#    USER INPUT
+###
 
-#########################
-## START OF USER INPUT ##
-#########################
-
-# Username and password for USNews Premium Account
+# Username and password for USNews Premium
 USERNAME = ""
 PASSWORD = ""
 
 # Category URL is the url when you look at all of the colleges in the tables
-# Make sure it's put in the form of "url/page+"
-# EX: CATEGORY_URL = "https://premium.usnews.com/best-graduate-schools/top-business-schools/part-time-rankings/page+"
-CATEGORY_URL = ""
+# EX: CATEGORY_URL = "https://premium.usnews.com/best-colleges/rankings"
+CATEGORY_URL = "https://premium.usnews.com/best-colleges/rankings"
 
 
 # Number of pages is the number of pages of colleges
 # EX: NUMBER_OF_PAGES = 12
 NUMBER_OF_PAGES = 0
 
-# Just take the first part after https://premium.usnews.com
+# the first part after https://premium.usnews.com
 # EX: LINK_SELECTOR = "/best-graduate-schools/"
-LINK_SELECTOR = ""
+LINK_SELECTOR = "/best-colleges/"
 
+# SUB_PAGES is the list of sub-pages you want to visit. This INCLUDES the base page
+# EX: SUB_PAGES = [ "", "admissions" ]
+SUB_PAGES = ["", "rankings"]
 
-# On the Unit_ID href, take this bit (if not graduate, not sure how you get it)
-# Put "N/A" if you don't want to find it
-# EX: UNIT_ID_SELECTOR = "/best-graduate-schools/top-graduate-schools/"
-UNIT_ID_SELECTOR = "N/A"
+# Column headings is the list of headings for your csv columns
+COLUMN_HEADINGS = []
 
-# SUB_PAGES is the pages you want, e.g. admissions, rankings, etc.
-# EX: SUB_PAGES = [ "admissions" ]
-SUB_PAGES = [ "" ]
-
-# Tables is the tables you want, e.g. part time enrollment, full time, etc.
-# Put [ "N/A" ] if doesn't matter what table (e.g. there are no duplicate attributes)
-# MAKE SURE TO USE THE CSS CLASS FOR THE TABLE
-# EX: TABLES = ["fall_admissions_enrollment_pt"]
-TABLES = ["fall_admissions_enrollment_pt"]
-
-# Attributes is the data you want, just use the english description
+# Attributes is the data you want per-page, using a CSS selector
+#       (firefox can get you this by inspect element, copy as CSS selector)
 # to set it up, make each set of data you want from a page a list and then put those in a big list
 # EX:  [ ["page one stuff", "other page one stuff"] , [ "page 2 stuff", "other page 2 stuff" ] ]
-ATTRIBUTES = [ [ "" ] ]
+# NOTE: THIS SHOULD NOT INCLUDE NAME, LOCATION, or XWALK ID, THAT WILL AUTOMATICALLY BE GATHERED
+ATTRIBUTES = [[], []]
 
-#########################################
-## END OF USER INPUT, START OF PROGRAM ##
-#########################################
+# This is where you put the xpath for the meta tag containing name, location, and xwalk-id
+# EX: <meta data-school-name="Princeton University"
+# data-school-xwalk-id="186131" data-school-location="Princeton, NJ">
+META = "/html/head/meta[11]"
 
 
-# sets initial urls
-LOGIN_URL = "https://secure.usnews.com/member/login"
-BASE_URL = "https://premium.usnews.com"
-PAGE_URL = ""
+###
+#    START OF PROGRAM
+###
+def main():
 
-# create a new session and login
-session = requests.Session()
-PAYLOAD = {
-'username': USERNAME ,
-'password': PASSWORD
-}
-login = session.post(LOGIN_URL, data=PAYLOAD)
+    # create a new webdriver
+    print("creating webdriver...")
+    browser = webdriver.Firefox()
 
-# finds the link and name for each college in the category rankings, and stores them to a list
-print("obtaining list of colleges...")
-COLLEGE_URLS = []
-NAMES = []
-link_re = re.compile(LINK_SELECTOR)
-for x in range(1, NUMBER_OF_PAGES + 1):
-    html = BeautifulSoup(session.get(CATEGORY_URL + str(x)).content, 'lxml', parse_only=SoupStrainer('tbody'))
-    for url in html.find_all("a", href=link_re):
-        if (url.text[0].isalpha()):
-            COLLEGE_URLS.append(url.get("href"))
-            NAMES.append(url.text)
-print("found " + str(len(NAMES)) + " colleges...")
+    # login to usnews premium
+    print("logging into USNews...")
+    browser.get("https://secure.usnews.com/member/login")
+    browser.find_element_by_name("username").send_keys(USERNAME)
+    browser.find_element_by_name("password").send_keys(PASSWORD)
+    browser.find_element_by_xpath('.//input[@type="submit"]').click()
 
-# open CSV file for writing
-f = open('output.csv','w')
-csv_writer = csv.writer(f, dialect='excel')
-csv_row = ["University Name", "Unit ID"]
-csv_row.extend([attrib for list in ATTRIBUTES for attrib in list])
-csv_writer.writerow(csv_row)
+    # wait for page to be loaded
+    time.sleep(2)
 
-# parses each link for the correct attributes & unitid
-unit_re = re.compile(UNIT_ID_SELECTOR)
-numeric = re.compile('[^0-9]')
-for i, college in enumerate(COLLEGE_URLS):
-    print("scraping data for " + NAMES[i] + "...")
-    csv_row = [NAMES[i]]
-    if (UNIT_ID_SELECTOR != "N/A"):
-        PAGE_URL = BASE_URL + college + "/ranking"
-        html = BeautifulSoup(session.get(PAGE_URL).content, 'lxml')
-        for url in html.find_all("a", href=unit_re):
-            csv_row.append(numeric.sub('', url['href']))
-            break
-    for j, page in enumerate(SUB_PAGES):
-        table_list = []
-        PAGE_URL = BASE_URL + college + "/" + page
-        html = BeautifulSoup(session.get(PAGE_URL).content, 'lxml')
-        if TABLES[0] == "NULL":
-            table_list = html.find_all("table")
-        else:
-            for item in TABLES:
-                table_list.append(html.find("table", class_=item))
-        data = []
-        for t in table_list:
-            rows = t.find_all("tr")
-            for r in rows:
-                columns = r.find_all("td")
-                data.append([(" ".join(c.text.split())) for c in columns])
-        for attrib in ATTRIBUTES[j]:
-            for dict in data:
-                if attrib in dict[0]:
-                    csv_row.append(dict[1])
+    # get list later
+    college_urls = []
+
+    # open CSV file for writing
+    print("creating csv file...")
+    csv_file = open("output.csv", "w")
+    csv_writer = csv.writer(csv_file, dialect="excel")
+    csv_row = COLUMN_HEADINGS
     csv_writer.writerow(csv_row)
-f.close()
-exit()
+
+    # parses each link for the correct attributes & unitid
+    for college in college_urls:
+        browser.get("https://premium.usnews.com" + college)
+        time.sleep(2)
+        meta_data = browser.find_element_by_css_selector(
+            "meta[data-school-xwalk-id]"
+        )
+        print(
+            "scraping data for "
+            + str(meta_data.get_attribute("data-school-name"))
+            + "..."
+        )
+        csv_row = [
+            meta_data.get_attribute("data-school-name"),
+            meta_data.get_attribute("data-school-xwalk-id"),
+            meta_data.get_attribute("data-school-location"),
+        ]
+        for attrib in ATTRIBUTES[0]:
+            try:
+                csv_row.append(
+                    browser.find_element_by_css_selector(attrib).text
+                )
+            except:
+                csv_row.append("N/A")
+        browser.get("https://premium.usnews.com" + college + "/" + "rankings")
+        time.sleep(6)
+        for attrib in ATTRIBUTES[1]:
+            try:
+                csv_row.append(
+                    str(
+                        browser.find_element_by_css_selector(
+                            attrib
+                        ).get_attribute("innerHTML")
+                    ).strip()
+                )
+            except:
+                csv_row.append("N/A")
+        csv_writer.writerow(csv_row)
+    csv_file.close()
+    exit()
+
+
+if __name__ == "__main__":
+    main()
