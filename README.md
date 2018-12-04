@@ -1,3 +1,3 @@
 # usnews-python
 
-Requires Python 3 and BeautifulSoup.
+Requires Python 3 and selenium.
